@@ -1,10 +1,13 @@
-import { renderAST } from "@roblox-ts/luau-ast";
+import luau, { renderAST } from "@roblox-ts/luau-ast";
 import { RojoResolver } from "@roblox-ts/rojo-resolver";
+import { readFileSync } from "fs-extra";
+import { sync } from "glob";
 import { PATH_SEP, pathJoin, VirtualFileSystem } from "Project/classes/VirtualFileSystem";
 import { validateCompilerOptions } from "Project/functions/validateCompilerOptions";
 import { getCustomPreEmitDiagnostics } from "Project/util/getCustomPreEmitDiagnostics";
+import { satisfies } from "semver";
 import { PathTranslator } from "Shared/classes/PathTranslator";
-import { NODE_MODULES, ProjectType, RBXTS_SCOPE } from "Shared/constants";
+import { COMPILER_VERSION, NODE_MODULES, ProjectType, RBXTS_SCOPE } from "Shared/constants";
 import { DiagnosticError } from "Shared/errors/DiagnosticError";
 import { ProjectData } from "Shared/types";
 import { assert } from "Shared/util/assert";
@@ -96,6 +99,42 @@ export class VirtualProject {
 			},
 		} as never);
 		this.pkgRojoResolvers = this.compilerOptions.typeRoots!.map(RojoResolver.synthetic);
+
+		// this.loadPlugins();
+	}
+
+	public loadPlugins() {
+		this.compilerOptions.typeRoots
+			// Grab all package.json files in typeRoots directories
+			?.map(typeRoot =>
+				sync(`${typeRoot}/*/package.json`).map(filePath => JSON.parse(readFileSync(filePath, "utf8"))),
+			)
+			.flat()
+			// Filter to those with a JavaScript plugin field
+			.filter(({ plugin }) => plugin?.endsWith(ts.Extension.Js))
+			// Filter to compiler compatible versions
+			.filter(({ engines }) => satisfies(engines?.["roblox-ts"], COMPILER_VERSION))
+			// Filter to plugin scripts that return a single function
+			.map(require)
+			.filter(plugin => typeof plugin === "function")
+			// Call the plugins
+			.forEach(plugin =>
+				plugin({
+					dependencies: {
+						ts,
+						luau,
+					},
+					services: {
+						tsProgram: this.program,
+						diagnosticService: DiagnosticService,
+					},
+					options: {
+						compilerOptions: this.compilerOptions,
+						projectOptions: this.data.projectOptions,
+					},
+					registration: {},
+				}),
+			);
 	}
 
 	public compileSource(source: string) {
