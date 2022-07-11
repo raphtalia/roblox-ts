@@ -41,11 +41,13 @@ export async function loadPlugins(program: ts.Program, data: ProjectData) {
 				)
 				.flat()
 
-				// Filter to those with a JavaScript plugin field
-				.filter(({ pkgJson }) => pkgJson.plugin?.endsWith(ts.Extension.Js))
-
-				// Filter to compiler compatible versions
-				.filter(({ pkgJson }) => satisfies(COMPILER_VERSION, pkgJson.engines?.["roblox-ts"]))
+				// Filter to those with a JavaScript plugin field and have a
+				// compatible compiler version
+				.filter(
+					({ pkgJson }) =>
+						pkgJson.plugin?.endsWith(ts.Extension.Js) &&
+						satisfies(COMPILER_VERSION, pkgJson.engines?.["roblox-ts"]),
+				)
 
 				// Convert to path and check path exists
 				.map(({ pkgPath, pkgJson }) => join(pkgPath, pkgJson.plugin))
