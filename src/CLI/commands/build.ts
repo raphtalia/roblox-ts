@@ -9,6 +9,7 @@ import { createPathTranslator } from "Project/functions/createPathTranslator";
 import { createProjectData } from "Project/functions/createProjectData";
 import { createProjectProgram } from "Project/functions/createProjectProgram";
 import { getChangedSourceFiles } from "Project/functions/getChangedSourceFiles";
+import { loadPlugins } from "Project/functions/loadPlugins";
 import { setupProjectWatchProgram } from "Project/functions/setupProjectWatchProgram";
 import { LogService } from "Shared/classes/LogService";
 import { ProjectType } from "Shared/constants";
@@ -127,12 +128,9 @@ export = ts.identity<yargs.CommandModule<{}, Partial<ProjectOptions> & ProjectFl
 				cleanup(pathTranslator);
 				copyInclude(data);
 				copyFiles(data, pathTranslator, new Set(getRootDirs(program.getCompilerOptions())));
-				const emitResult = compileFiles(
-					program.getProgram(),
-					data,
-					pathTranslator,
-					getChangedSourceFiles(program),
-				);
+				const tsProgram = program.getProgram();
+				await loadPlugins(tsProgram, data);
+				const emitResult = compileFiles(tsProgram, data, pathTranslator, getChangedSourceFiles(program));
 				for (const diagnostic of emitResult.diagnostics) {
 					diagnosticReporter(diagnostic);
 				}
