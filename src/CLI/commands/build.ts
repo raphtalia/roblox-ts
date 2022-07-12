@@ -9,7 +9,6 @@ import { createPathTranslator } from "Project/functions/createPathTranslator";
 import { createProjectData } from "Project/functions/createProjectData";
 import { createProjectProgram } from "Project/functions/createProjectProgram";
 import { getChangedSourceFiles } from "Project/functions/getChangedSourceFiles";
-import { loadPlugins } from "Project/functions/loadPlugins";
 import { setupProjectWatchProgram } from "Project/functions/setupProjectWatchProgram";
 import { LogService } from "Shared/classes/LogService";
 import { ProjectType } from "Shared/constants";
@@ -17,6 +16,7 @@ import { LoggableError } from "Shared/errors/LoggableError";
 import { ProjectFlags, ProjectOptions } from "Shared/types";
 import { getRootDirs } from "Shared/util/getRootDirs";
 import { hasErrors } from "Shared/util/hasErrors";
+import { PluginManager } from "TSTransformer/classes/PluginManager";
 import ts from "typescript";
 import yargs from "yargs";
 
@@ -128,9 +128,15 @@ export = ts.identity<yargs.CommandModule<{}, Partial<ProjectOptions> & ProjectFl
 				cleanup(pathTranslator);
 				copyInclude(data);
 				copyFiles(data, pathTranslator, new Set(getRootDirs(program.getCompilerOptions())));
+
 				const tsProgram = program.getProgram();
-				await loadPlugins(tsProgram, data);
-				const emitResult = compileFiles(tsProgram, data, pathTranslator, getChangedSourceFiles(program));
+				const pluginManager = new PluginManager(tsProgram, data, pathTranslator);
+				await pluginManager.loadPlugins();
+
+				const sourceFiles = getChangedSourceFiles(program);
+				const emitResult = compileFiles(tsProgram, data, pathTranslator, sourceFiles);
+				pluginManager.runInitialCompile(sourceFiles);
+
 				for (const diagnostic of emitResult.diagnostics) {
 					diagnosticReporter(diagnostic);
 				}

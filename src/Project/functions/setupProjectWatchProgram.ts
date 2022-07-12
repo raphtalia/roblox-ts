@@ -18,6 +18,7 @@ import { PathTranslator } from "Shared/classes/PathTranslator";
 import { DiagnosticError } from "Shared/errors/DiagnosticError";
 import { assert } from "Shared/util/assert";
 import { getRootDirs } from "Shared/util/getRootDirs";
+import { PluginManager } from "TSTransformer/classes/PluginManager";
 import ts from "typescript";
 
 const CHOKIDAR_OPTIONS: chokidar.WatchOptions = {
@@ -71,11 +72,20 @@ export function setupProjectWatchProgram(data: ProjectData, usePolling: boolean)
 
 	let program: ts.EmitAndSemanticDiagnosticsBuilderProgram | undefined;
 	let pathTranslator: PathTranslator | undefined;
+	let pluginManager: PluginManager;
 	const createProgram = createProgramFactory(data, options);
-	function refreshProgram() {
+	async function refreshProgram() {
 		try {
 			program = createProgram([...fileNamesSet], options);
 			pathTranslator = createPathTranslator(program);
+
+			if (pluginManager) {
+				pluginManager.tsProgram = program.getProgram();
+				pluginManager.pathTranslator = pathTranslator;
+			} else {
+				pluginManager = new PluginManager(program.getProgram(), data, pathTranslator);
+				await pluginManager.loadPlugins();
+			}
 		} catch (e) {
 			if (e instanceof DiagnosticError) {
 				for (const diagnostic of e.diagnostics) {
@@ -87,14 +97,17 @@ export function setupProjectWatchProgram(data: ProjectData, usePolling: boolean)
 		}
 	}
 
-	function runInitialCompile() {
-		refreshProgram();
+	async function runInitialCompile() {
+		await refreshProgram();
 		assert(program && pathTranslator);
 		cleanup(pathTranslator);
 		copyInclude(data);
 		copyFiles(data, pathTranslator, new Set(getRootDirs(options)));
+
 		const sourceFiles = getChangedSourceFiles(program);
 		const emitResult = compileFiles(program.getProgram(), data, pathTranslator, sourceFiles);
+		pluginManager.runInitialCompile(sourceFiles);
+
 		if (!emitResult.emitSkipped) {
 			initialCompileCompleted = true;
 		}
@@ -104,7 +117,11 @@ export function setupProjectWatchProgram(data: ProjectData, usePolling: boolean)
 	const filesToCompile = new Set<string>();
 	const filesToCopy = new Set<string>();
 	const filesToClean = new Set<string>();
-	function runIncrementalCompile(additions: Set<string>, changes: Set<string>, removals: Set<string>): ts.EmitResult {
+	async function runIncrementalCompile(
+		additions: Set<string>,
+		changes: Set<string>,
+		removals: Set<string>,
+	): Promise<ts.EmitResult> {
 		for (const fsPath of additions) {
 			if (fs.statSync(fsPath).isDirectory()) {
 				walkDirectorySync(fsPath, item => {
@@ -136,10 +153,11 @@ export function setupProjectWatchProgram(data: ProjectData, usePolling: boolean)
 			filesToClean.add(fsPath);
 		}
 
-		refreshProgram();
+		await refreshProgram();
 		assert(program && pathTranslator);
 		const sourceFiles = getChangedSourceFiles(program, options.incremental ? undefined : [...filesToCompile]);
 		const emitResult = compileFiles(program.getProgram(), data, pathTranslator, sourceFiles);
+		pluginManager.runIncrementalCompile(additions, changes, removals);
 		if (emitResult.emitSkipped) {
 			// exit before copying to prevent half-updated out directory
 			return emitResult;
@@ -162,7 +180,7 @@ export function setupProjectWatchProgram(data: ProjectData, usePolling: boolean)
 		return emitResult;
 	}
 
-	function closeEventCollection() {
+	async function closeEventCollection() {
 		collecting = false;
 		const additions = filesToAdd;
 		const changes = filesToChange;
@@ -171,9 +189,9 @@ export function setupProjectWatchProgram(data: ProjectData, usePolling: boolean)
 		filesToChange = new Set();
 		filesToDelete = new Set();
 
-		const emitResult = !initialCompileCompleted
+		const emitResult = await (!initialCompileCompleted
 			? runInitialCompile()
-			: runIncrementalCompile(additions, changes, removals);
+			: runIncrementalCompile(additions, changes, removals));
 		reportEmitResult(emitResult);
 	}
 
@@ -209,8 +227,8 @@ export function setupProjectWatchProgram(data: ProjectData, usePolling: boolean)
 		.on("change", collectChangeEvent)
 		.on("unlink", collectDeleteEvent)
 		.on("unlinkDir", collectDeleteEvent)
-		.once("ready", () => {
+		.once("ready", async () => {
 			reportText("Starting compilation in watch mode...");
-			reportEmitResult(runInitialCompile());
+			reportEmitResult(await runInitialCompile());
 		});
 }
